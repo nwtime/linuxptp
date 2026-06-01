@@ -1069,6 +1069,11 @@ start if it does not exist, with owner set to the user specified by the
 .B user
 option. The default is /var/run/ptp/ptp4l.
 
+If the address is /var/run/ptp/ptp4l or /var/run/ptp4l (which was the default
+in older versions),
+.B ptp4l
+will create a symbolic link at the other location for compatibility.
+
 .TP
 .B uds_file_mode
 File mode of the UNIX domain socket used for receiving local management
@@ -1081,6 +1086,11 @@ Specifies the address of the second UNIX domain socket for receiving local
 management messages, which is restricted to GET actions and does not forward
 messages to other ports. Access to this socket can be given to untrusted
 applications for monitoring purposes. The default is /var/run/ptp/ptp4lro.
+
+With the default address
+.B ptp4l
+will create a symbolic link at /var/run/ptp4lro (which was the default in older
+versions) for compatibility.
 
 .TP
 .B uds_ro_file_mode

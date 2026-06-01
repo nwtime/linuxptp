@@ -1285,8 +1285,6 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	 */
 
 	uds_ifname = config_get_string(config, NULL, "uds_address");
-	if (!strcmp(uds_ifname, "/var/run/ptp/ptp4l"))
-		create_symlink("ptp/ptp4l", "/var/run/ptp4l");
 	c->uds_rw_if = interface_create(uds_ifname, NULL);
 	if (config_set_section_int(config, interface_name(c->uds_rw_if),
 				   "announceReceiptTimeout", 0)) {
@@ -1307,8 +1305,6 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 
 	uds_ifname = config_get_string(config, NULL, "uds_ro_address");
 	c->uds_ro_if = interface_create(uds_ifname, NULL);
-	if (!strcmp(uds_ifname, "/var/run/ptp/ptp4lro"))
-		create_symlink("ptp/ptp4lro", "/var/run/ptp4lro");
 	if (config_set_section_int(config, interface_name(c->uds_ro_if),
 				   "announceReceiptTimeout", 0)) {
 		return NULL;
@@ -1473,6 +1469,17 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	if (!c->slave_event_monitor) {
 		pr_err("failed to create slave event monitor");
 		return NULL;
+	}
+
+	/* Create symlinks for compatibility with previous default addresses. */
+	if (!strcmp(interface_name(c->uds_rw_if), "/var/run/ptp/ptp4l")) {
+		create_symlink("ptp/ptp4l", "/var/run/ptp4l");
+	} else if (!strcmp(interface_name(c->uds_rw_if), "/var/run/ptp4l")) {
+		create_uds_directory("/var/run/ptp/ptp4l", user);
+		create_symlink("../ptp4l", "/var/run/ptp/ptp4l");
+	}
+	if (!strcmp(interface_name(c->uds_ro_if), "/var/run/ptp/ptp4lro")) {
+		create_symlink("ptp/ptp4lro", "/var/run/ptp4lro");
 	}
 
 	/* Create the ports. */
