@@ -234,10 +234,12 @@ static int raw_close(struct transport *t, struct fdarray *fda)
 	return 0;
 }
 
-static int open_socket(const char *name, int event, unsigned char *local_addr,
-		       unsigned char *ptp_dst_mac, unsigned char *p2p_dst_mac,
-		       int socket_priority)
+static int open_socket(struct interface *iface, int event,
+		       unsigned char *local_addr, unsigned char *ptp_dst_mac,
+		       unsigned char *p2p_dst_mac, int socket_priority,
+		       enum timestamp_type ts_type)
 {
+	const char *name = interface_label(iface);
 	struct sockaddr_ll addr;
 	int fd, index;
 
@@ -249,6 +251,20 @@ static int open_socket(const char *name, int event, unsigned char *local_addr,
 	index = sk_interface_index(fd, name);
 	if (index < 0)
 		goto no_option;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, name, strlen(name))) {
+		pr_err("setsockopt SO_BINDTODEVICE failed: %m");
+		goto no_option;
+	}
+
+	if (event) {
+		if (sk_timestamping_init(fd, name, ts_type, TRANS_IEEE_802_3,
+					 interface_get_vclock(iface)))
+			goto no_option;
+	} else {
+		if (sk_general_init(fd))
+			goto no_option;
+	}
 
 	if (socket_priority > 0 &&
 	    setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &socket_priority,
@@ -266,10 +282,6 @@ static int open_socket(const char *name, int event, unsigned char *local_addr,
 	addr.sll_protocol = htons(ETH_P_ALL);
 	if (bind(fd, (struct sockaddr *) &addr, sizeof(addr))) {
 		pr_err("bind failed: %m");
-		goto no_option;
-	}
-	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, name, strlen(name))) {
-		pr_err("setsockopt SO_BINDTODEVICE failed: %m");
 		goto no_option;
 	}
 
@@ -374,29 +386,20 @@ static int raw_open(struct transport *t, struct interface *iface,
 
 	socket_priority = config_get_int(t->cfg, "global", "socket_priority");
 
-	efd = open_socket(name, 1, raw->src_addr.sll.sll_addr, ptp_dst_mac,
-			  p2p_dst_mac, socket_priority);
+	efd = open_socket(iface, 1, raw->src_addr.sll.sll_addr, ptp_dst_mac,
+			  p2p_dst_mac, socket_priority, ts_type);
 	if (efd < 0)
 		goto no_event;
 
-	gfd = open_socket(name, 0, raw->src_addr.sll.sll_addr, p2p_dst_mac,
-			  p2p_dst_mac, socket_priority);
+	gfd = open_socket(iface, 0, raw->src_addr.sll.sll_addr, p2p_dst_mac,
+			  p2p_dst_mac, socket_priority, ts_type);
 	if (gfd < 0)
 		goto no_general;
-
-	if (sk_timestamping_init(efd, name, ts_type, TRANS_IEEE_802_3,
-				 interface_get_vclock(iface)))
-		goto no_timestamping;
-
-	if (sk_general_init(gfd))
-		goto no_timestamping;
 
 	fda->fd[FD_EVENT] = efd;
 	fda->fd[FD_GENERAL] = gfd;
 	return 0;
 
-no_timestamping:
-	close(gfd);
 no_general:
 	close(efd);
 no_event:

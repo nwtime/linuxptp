@@ -97,9 +97,12 @@ static int udp6_close(struct transport *t, struct fdarray *fda)
 	return 0;
 }
 
-static int open_socket_ipv6(const char *name, struct in6_addr mc_addr[2], short port,
-			    int *interface_index, int hop_limit)
+static int open_socket_ipv6(struct interface *iface, int event,
+			    struct in6_addr mc_addr[2], short port,
+			    int *interface_index, int hop_limit,
+			    enum timestamp_type ts_type)
 {
+	const char *name = interface_name(iface);
 	struct sockaddr_in6 addr;
 	int fd, index, on = 1;
 
@@ -119,16 +122,27 @@ static int open_socket_ipv6(const char *name, struct in6_addr mc_addr[2], short 
 
 	*interface_index = index;
 
+	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, name, strlen(name))) {
+		pr_err("setsockopt SO_BINDTODEVICE failed: %m");
+		goto no_option;
+	}
+
+	if (event) {
+		if (sk_timestamping_init(fd, interface_label(iface), ts_type,
+					 TRANS_UDP_IPV6,
+					 interface_get_vclock(iface)))
+			goto no_option;
+	} else {
+		if (sk_general_init(fd))
+			goto no_option;
+	}
+
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
 		pr_err("setsockopt SO_REUSEADDR failed: %m");
 		goto no_option;
 	}
 	if (bind(fd, (struct sockaddr *) &addr, sizeof(addr))) {
 		pr_err("bind failed: %m");
-		goto no_option;
-	}
-	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, name, strlen(name))) {
-		pr_err("setsockopt SO_BINDTODEVICE failed: %m");
 		goto no_option;
 	}
 	if (setsockopt(fd, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hop_limit,
@@ -187,22 +201,15 @@ static int udp6_open(struct transport *t, struct interface *iface,
 		return -1;
 	}
 
-	efd = open_socket_ipv6(name, udp6->mc6_addr, EVENT_PORT, &udp6->index,
-			       hop_limit);
+	efd = open_socket_ipv6(iface, 1, udp6->mc6_addr, EVENT_PORT,
+			       &udp6->index, hop_limit, ts_type);
 	if (efd < 0)
 		goto no_event;
 
-	gfd = open_socket_ipv6(name, udp6->mc6_addr, GENERAL_PORT, &udp6->index,
-			       hop_limit);
+	gfd = open_socket_ipv6(iface, 0, udp6->mc6_addr, GENERAL_PORT,
+			       &udp6->index, hop_limit, ts_type);
 	if (gfd < 0)
 		goto no_general;
-
-	if (sk_timestamping_init(efd, interface_label(iface), ts_type,
-				 TRANS_UDP_IPV6, interface_get_vclock(iface)))
-		goto no_timestamping;
-
-	if (sk_general_init(gfd))
-		goto no_timestamping;
 
 	event_dscp = config_get_int(t->cfg, NULL, "dscp_event");
 	general_dscp = config_get_int(t->cfg, NULL, "dscp_general");
@@ -218,8 +225,6 @@ static int udp6_open(struct transport *t, struct interface *iface,
 	fda->fd[FD_GENERAL] = gfd;
 	return 0;
 
-no_timestamping:
-	close(gfd);
 no_general:
 	close(efd);
 no_event:

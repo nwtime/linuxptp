@@ -89,9 +89,11 @@ static int udp_close(struct transport *t, struct fdarray *fda)
 	return 0;
 }
 
-static int open_socket(const char *name, struct in_addr mc_addr[2], short port,
-		       int ttl)
+static int open_socket(struct interface *iface, int event,
+		       struct in_addr mc_addr[2], short port, int ttl,
+		       enum timestamp_type ts_type)
 {
+	const char *name = interface_name(iface);
 	struct sockaddr_in addr;
 	int fd, index, on = 1;
 
@@ -109,16 +111,27 @@ static int open_socket(const char *name, struct in_addr mc_addr[2], short port,
 	if (index < 0)
 		goto no_option;
 
+	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, name, strlen(name))) {
+		pr_err("setsockopt SO_BINDTODEVICE failed: %m");
+		goto no_option;
+	}
+
+	if (event) {
+		if (sk_timestamping_init(fd, interface_label(iface), ts_type,
+					 TRANS_UDP_IPV4,
+					 interface_get_vclock(iface)))
+			goto no_option;
+	} else {
+		if (sk_general_init(fd))
+			goto no_option;
+	}
+
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
 		pr_err("setsockopt SO_REUSEADDR failed: %m");
 		goto no_option;
 	}
 	if (bind(fd, (struct sockaddr *) &addr, sizeof(addr))) {
 		pr_err("bind failed: %m");
-		goto no_option;
-	}
-	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, name, strlen(name))) {
-		pr_err("setsockopt SO_BINDTODEVICE failed: %m");
 		goto no_option;
 	}
 	if (setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl))) {
@@ -175,20 +188,13 @@ static int udp_open(struct transport *t, struct interface *iface,
 		return -1;
 	}
 
-	efd = open_socket(name, udp->mcast_addr, EVENT_PORT, ttl);
+	efd = open_socket(iface, 1, udp->mcast_addr, EVENT_PORT, ttl, ts_type);
 	if (efd < 0)
 		goto no_event;
 
-	gfd = open_socket(name, udp->mcast_addr, GENERAL_PORT, ttl);
+	gfd = open_socket(iface, 0, udp->mcast_addr, GENERAL_PORT, ttl, ts_type);
 	if (gfd < 0)
 		goto no_general;
-
-	if (sk_timestamping_init(efd, interface_label(iface), ts_type, TRANS_UDP_IPV4,
-				 interface_get_vclock(iface)))
-		goto no_timestamping;
-
-	if (sk_general_init(gfd))
-		goto no_timestamping;
 
 	event_dscp = config_get_int(t->cfg, NULL, "dscp_event");
 	general_dscp = config_get_int(t->cfg, NULL, "dscp_general");
@@ -204,8 +210,6 @@ static int udp_open(struct transport *t, struct interface *iface,
 	fda->fd[FD_GENERAL] = gfd;
 	return 0;
 
-no_timestamping:
-	close(gfd);
 no_general:
 	close(efd);
 no_event:
